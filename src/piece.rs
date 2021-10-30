@@ -1,12 +1,12 @@
 use crate::board::Board;
-use crate::position::{MoveDirection, Position};
+use crate::position::{MoveDirection, Position, XY};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 
 pub trait Piece: Display {
     fn color(&self) -> Color;
     fn position(&self) -> Position;
-    fn moves(&self, board: Board) -> HashSet<Position>;
+    fn moves(&self, board: &Board) -> HashSet<Position>;
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -35,8 +35,77 @@ impl Piece for Pawn {
         self.position
     }
 
-    fn moves(&self, board: Board) -> HashSet<Position> {
-        todo!()
+    // TODO: add check for en passant
+    fn moves(&self, board: &Board) -> HashSet<Position> {
+        let same_color_piece_positions = board
+            .pieces()
+            .iter()
+            .filter(|piece| piece.color() == self.color())
+            .map(|piece| piece.position())
+            .collect::<HashSet<Position>>();
+
+        let opposite_color_piece_positions = board
+            .pieces()
+            .iter()
+            .filter(|piece| piece.color() != self.color())
+            .map(|piece| piece.position())
+            .collect::<HashSet<Position>>();
+
+        let all_piece_positions: HashSet<Position> = same_color_piece_positions
+            .union(&opposite_color_piece_positions)
+            .copied()
+            .collect();
+
+        let in_home_row = matches!(
+            (self.color(), self.position().to_xy()),
+            (Color::White, XY::OnBoard(_, 1)) | (Color::Black, XY::OnBoard(_, 6))
+        );
+
+        let mut all = HashSet::new();
+
+        match self.color() {
+            Color::Black => {
+                if !all_piece_positions.contains(&self.position().down()) {
+                    all.insert(self.position().down());
+                }
+
+                for position in [self.position().down_left(), self.position().down_right()] {
+                    if opposite_color_piece_positions.contains(&position) {
+                        all.insert(position);
+                    }
+                }
+
+                if in_home_row
+                    && !all_piece_positions.contains(&self.position().down().down())
+                    && !all_piece_positions.contains(&self.position().down())
+                {
+                    all.insert(self.position().down().down());
+                }
+            }
+            Color::White => {
+                if !all_piece_positions.contains(&self.position().up()) {
+                    all.insert(self.position().up());
+                }
+
+                for position in [self.position().up_left(), self.position().up_right()] {
+                    if opposite_color_piece_positions.contains(&position) {
+                        all.insert(position);
+                    }
+                }
+
+                if in_home_row
+                    && !all_piece_positions.contains(&self.position().up().up())
+                    && !all_piece_positions.contains(&self.position().up())
+                {
+                    all.insert(self.position().up().up());
+                }
+            }
+        };
+
+        all.iter()
+            .filter(|position| !same_color_piece_positions.contains(position))
+            .copied()
+            .collect()
     }
 }
 
@@ -72,7 +141,7 @@ impl Piece for Knight {
         self.position
     }
 
-    fn moves(&self, board: Board) -> HashSet<Position> {
+    fn moves(&self, board: &Board) -> HashSet<Position> {
         let same_color_piece_positions = board
             .pieces()
             .iter()
@@ -150,7 +219,7 @@ impl Piece for Bishop {
         self.position
     }
 
-    fn moves(&self, board: Board) -> HashSet<Position> {
+    fn moves(&self, board: &Board) -> HashSet<Position> {
         let pieces_map: HashMap<Position, &Box<dyn Piece>> = board
             .pieces()
             .iter()
@@ -220,7 +289,7 @@ impl Piece for Rook {
         self.position
     }
 
-    fn moves(&self, board: Board) -> HashSet<Position> {
+    fn moves(&self, board: &Board) -> HashSet<Position> {
         let pieces_map: HashMap<Position, &Box<dyn Piece>> = board
             .pieces()
             .iter()
@@ -290,38 +359,7 @@ impl Piece for Queen {
         self.position
     }
 
-    fn moves(&self, board: Board) -> HashSet<Position> {
-        //     pieces_map =
-        //     board.pieces
-        //     |> Enum.map(fn piece ->
-        //       {Chess.Piece.position(piece), piece}
-        //     end)
-        //     |> Enum.into(%{})
-
-        //   Enum.flat_map(
-        //     [:up, :right, :down, :left, :up_left, :up_right, :down_right, :down_left],
-        //     fn move_direction ->
-        //       this.position
-        //       |> Position.stream(move_direction)
-        //       |> Enum.take_while(fn position ->
-        //         Position.to_xy(position) != :off_board
-        //       end)
-        //       |> Enum.map(fn position ->
-        //         {position, Map.get(pieces_map, position)}
-        //       end)
-        //       |> Enum.reduce_while([], fn {position, piece}, positions ->
-        //         if piece do
-        //           if Chess.Piece.color(piece) == this.color do
-        //             {:halt, positions}
-        //           else
-        //             {:halt, [position | positions]}
-        //           end
-        //         else
-        //           {:cont, [position | positions]}
-        //         end
-        //       end)
-        //     end
-        //   )
+    fn moves(&self, board: &Board) -> HashSet<Position> {
         let pieces_map: HashMap<Position, &Box<dyn Piece>> = board
             .pieces()
             .iter()
@@ -395,7 +433,9 @@ impl Piece for King {
         self.position
     }
 
-    fn moves(&self, board: Board) -> HashSet<Position> {
+    // TODO: add check for moving into check
+    // TODO: add castling
+    fn moves(&self, board: &Board) -> HashSet<Position> {
         let same_color_piece_positions = board
             .pieces()
             .iter()
@@ -482,14 +522,49 @@ mod tests {
     }
 
     mod pawn {
-        #[test]
-        fn free() {}
+        use super::*;
 
         #[test]
-        fn blocks() {}
+        fn free() {
+            let board = Board::empty();
+            let pawn = Pawn::new(Color::Black, (4, 6).into());
+            assert_eq!(
+                pawn.moves(&board),
+                HashSet::from([(4, 5).into(), (4, 4).into()])
+            );
+
+            let pawn = Pawn::new(Color::White, (4, 6).into());
+            assert_eq!(pawn.moves(&board), HashSet::from([(4, 7).into()]))
+        }
 
         #[test]
-        fn takes() {}
+        fn blocks() {
+            let board = Board::new(vec![Box::new(Pawn::new(Color::Black, (4, 5).into()))]);
+            let pawn = Pawn::new(Color::Black, (4, 6).into());
+            assert_eq!(pawn.moves(&board), HashSet::new());
+
+            let board = Board::new(vec![Box::new(Pawn::new(Color::White, (5, 7).into()))]);
+            let pawn = Pawn::new(Color::White, (4, 6).into());
+            assert_eq!(pawn.moves(&board), HashSet::from([(4, 7).into()]));
+
+            let board = Board::new(vec![Box::new(Pawn::new(Color::White, (4, 3).into()))]);
+            let pawn = Pawn::new(Color::White, (4, 1).into());
+            assert_eq!(pawn.moves(&board), HashSet::from([(4, 2).into()]));
+        }
+
+        #[test]
+        fn takes() {
+            let board = Board::new(vec![Box::new(Pawn::new(Color::White, (4, 5).into()))]);
+            let pawn = Pawn::new(Color::Black, (4, 6).into());
+            assert_eq!(pawn.moves(&board), HashSet::new());
+
+            let board = Board::new(vec![Box::new(Pawn::new(Color::Black, (5, 7).into()))]);
+            let pawn = Pawn::new(Color::White, (4, 6).into());
+            assert_eq!(
+                pawn.moves(&board),
+                HashSet::from([(4, 7).into(), (5, 7).into()])
+            );
+        }
     }
 
     mod knight {
@@ -500,7 +575,7 @@ mod tests {
             let board = Board::empty();
             let knight = Knight::new(Color::Black, Position::new(4, 4));
             assert_eq!(
-                knight.moves(board).into_iter().collect::<HashSet<_>>(),
+                knight.moves(&board).into_iter().collect::<HashSet<_>>(),
                 HashSet::from([
                     // up
                     (5, 6).into(),
@@ -529,7 +604,7 @@ mod tests {
             let knight = Knight::new(Color::Black, Position::new(4, 4));
 
             assert_eq!(
-                knight.moves(board).into_iter().collect::<HashSet<_>>(),
+                knight.moves(&board).into_iter().collect::<HashSet<_>>(),
                 HashSet::from([
                     (5, 6).into(),
                     (3, 6).into(),
@@ -552,7 +627,7 @@ mod tests {
             let knight = Knight::new(Color::Black, Position::new(4, 4));
 
             assert_eq!(
-                knight.moves(board).into_iter().collect::<HashSet<_>>(),
+                knight.moves(&board).into_iter().collect::<HashSet<_>>(),
                 HashSet::from([
                     (5, 6).into(),
                     (3, 6).into(),
@@ -577,7 +652,7 @@ mod tests {
             let bishop = Bishop::new(Color::Black, Position::new(4, 4));
 
             assert_eq!(
-                bishop.moves(board).into_iter().collect::<HashSet<_>>(),
+                bishop.moves(&board).into_iter().collect::<HashSet<_>>(),
                 HashSet::from([
                     (5, 5).into(),
                     (6, 6).into(),
@@ -609,7 +684,7 @@ mod tests {
             let bishop = Bishop::new(Color::Black, Position::new(4, 4));
 
             assert_eq!(
-                bishop.moves(board).into_iter().collect::<HashSet<_>>(),
+                bishop.moves(&board).into_iter().collect::<HashSet<_>>(),
                 HashSet::from([
                     (5, 5).into(),
                     (6, 6).into(),
@@ -638,7 +713,7 @@ mod tests {
             let bishop = Bishop::new(Color::Black, Position::new(4, 4));
 
             assert_eq!(
-                bishop.moves(board).into_iter().collect::<HashSet<_>>(),
+                bishop.moves(&board).into_iter().collect::<HashSet<_>>(),
                 HashSet::from([
                     (5, 5).into(),
                     (6, 6).into(),
@@ -669,7 +744,7 @@ mod tests {
             let rook = Rook::new(Color::Black, Position::new(4, 4));
 
             assert_eq!(
-                rook.moves(board).into_iter().collect::<HashSet<_>>(),
+                rook.moves(&board).into_iter().collect::<HashSet<_>>(),
                 HashSet::from([
                     // up
                     (4, 5).into(),
@@ -702,7 +777,7 @@ mod tests {
             let rook = Rook::new(Color::Black, Position::new(4, 4));
 
             assert_eq!(
-                rook.moves(board).into_iter().collect::<HashSet<_>>(),
+                rook.moves(&board).into_iter().collect::<HashSet<_>>(),
                 HashSet::from([
                     // up
                     // right
@@ -730,7 +805,7 @@ mod tests {
             let rook = Rook::new(Color::Black, Position::new(4, 4));
 
             assert_eq!(
-                rook.moves(board).into_iter().collect::<HashSet<_>>(),
+                rook.moves(&board).into_iter().collect::<HashSet<_>>(),
                 HashSet::from([
                     // up
                     // right
@@ -754,7 +829,7 @@ mod tests {
             let board = Board::empty();
             let queen = Queen::new(Color::Black, (4, 4).into());
             assert_eq!(
-                queen.moves(board),
+                queen.moves(&board),
                 HashSet::from([
                     (4, 5).into(),
                     (4, 6).into(),
@@ -799,7 +874,7 @@ mod tests {
             let board = Board::new(vec![Box::new(Pawn::new(Color::Black, (4, 5).into()))]);
             let queen = Queen::new(Color::Black, (4, 4).into());
             assert_eq!(
-                queen.moves(board),
+                queen.moves(&board),
                 HashSet::from([
                     // up
                     // right
@@ -847,7 +922,7 @@ mod tests {
             let queen = Queen::new(Color::Black, (4, 4).into());
 
             assert_eq!(
-                queen.moves(board),
+                queen.moves(&board),
                 HashSet::from([
                     // up
                     // right
@@ -892,7 +967,7 @@ mod tests {
             let board = Board::empty();
             let king = King::new(Color::Black, Position::new(4, 4));
             assert_eq!(
-                king.moves(board),
+                king.moves(&board),
                 HashSet::from([
                     (4, 5).into(),
                     (5, 5).into(),
@@ -916,7 +991,7 @@ mod tests {
             let king = King::new(Color::Black, (4, 4).into());
 
             assert_eq!(
-                king.moves(board),
+                king.moves(&board),
                 HashSet::from([
                     (5, 5).into(),
                     (5, 4).into(),
@@ -938,7 +1013,7 @@ mod tests {
             let king = King::new(Color::Black, (4, 4).into());
 
             assert_eq!(
-                king.moves(board),
+                king.moves(&board),
                 HashSet::from([
                     (4, 5).into(),
                     (5, 5).into(),
